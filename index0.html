@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock & Contacts-Pro</title>
+    <script defer src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
+    <style>
+        :root { --primary: #1a73e8; --bg: #f0f2f5; --white: #fff; --danger: #d93025; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); margin: 0; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+        header, .bottom-nav { background: var(--primary); color: white; padding: 12px; text-align: center; font-weight: bold; z-index: 100; }
+        .bottom-nav { background: white; position: fixed; bottom: 0; width: 100%; display: flex; border-top: 1px solid #ddd; }
+        .container { flex: 1; overflow-y: auto; padding: 12px 12px 80px; }
+        .tab-content { display: none; } .active-tab { display: block; }
+        .card { background: var(--white); border-radius: 12px; padding: 15px; margin-bottom: 12px; box-shadow: 0 1px 2px #0002; }
+        .btn { border: none; padding: 8px 15px; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        .btn-blue { background: var(--primary); color: white; width: 100%; }
+        .nav-item { flex: 1; border: none; background: none; color: #666; font-size: 11px; cursor: pointer; text-align: center; }
+        .nav-item.active { color: var(--primary); }
+        .full-window { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg); z-index: 2000; display: none; flex-direction: column; }
+        #chat-messages { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px; background: #e5ddd5; }
+        .msg-bubble { max-width: 75%; padding: 8px 12px; border-radius: 12px; font-size: 14px; box-shadow: 0 1px 1px #0001; }
+        .msg-sent { background: #dcf8c6; align-self: flex-end; }
+        .msg-received { background: white; align-self: flex-start; }
+        .msg-dot { position: absolute; width: 10px; height: 10px; background: var(--danger); border-radius: 50%; display: none; }
+        #app-loader { position: fixed; inset: 0; background: var(--bg); z-index: 9999; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        .spinner { border: 4px solid #0001; border-left-color: var(--primary); border-radius: 50%; width: 35px; height: 35px; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="app-loader"><div class="spinner"></div><p>লোড হচ্ছে...</p></div>
+<header id="main-header">টাইমলাইন</header>
+
+<div class="container">
+    <div id="feed-tab" class="tab-content active-tab">
+        <div class="card"><textarea id="status-input" placeholder="কি ভাবছেন?" style="width:100%; border:none; outline:none; height:50px;"></textarea>
+        <button class="btn btn-blue" onclick="postStatus()">পোস্ট করুন</button></div>
+        <div id="public-feed"></div>
+    </div>
+    <div id="friends-tab" class="tab-content">
+        <div class="search-box card" style="display:flex; gap:5px;"><input type="text" id="user-search" placeholder="খুঁজুন..." style="flex:1; border-radius:20px; padding:8px; border:1px solid #ddd;">
+        <button class="btn btn-blue" style="width:auto" onclick="searchUsers()">Search</button></div>
+        <div id="req-incoming"></div><div id="my-friends-list"></div>
+    </div>
+    <div id="messages-tab" class="tab-content"><div id="chat-user-list"></div></div>
+    <div id="profile-tab" class="tab-content">
+        <div class="card" style="text-align:center;">
+            <img id="my-img-display" style="width:80px; height:80px; border-radius:50%;" src="">
+            <h2 id="my-name-display"></h2><p id="my-biz-name"></p>
+            <button class="btn btn-blue btn-sm" onclick="alert('Update Profile')">এডিট প্রোফাইল</button>
+        </div>
+        <div id="my-posts-feed"></div>
+    </div>
+</div>
+
+<div id="chat-window" class="full-window">
+    <header style="display:flex; align-items:center;"><span onclick="closeChat()" style="cursor:pointer; font-size:20px;">←</span><span id="chat-title" style="margin-left:15px;">চ্যাট</span></header>
+    <div id="chat-messages"></div>
+    <div class="card" style="margin:0; display:flex; gap:10px; border-radius:0;">
+        <input type="text" id="chat-input" placeholder="লিখুন..." style="flex:1; padding:10px; border-radius:20px; border:1px solid #ddd;">
+        <button class="btn btn-blue" style="width:auto" onclick="sendChatMessage()">➤</button>
+    </div>
+</div>
+
+<div class="bottom-nav">
+    <button class="nav-item active" onclick="switchTab('feed', this)">🏠<br>ফিড</button>
+    <button class="nav-item" onclick="switchTab('friends', this)">👥<br>বন্ধুরা</button>
+    <button class="nav-item" onclick="switchTab('messages', this)">💬<br>মেসেজ<div class="msg-dot" id="nav-msg-dot"></div></button>
+    <button class="nav-item" onclick="switchTab('profile', this)">👤<br>প্রোফাইল</button>
+</div>
+
+<script>
+    let dbData = JSON.parse(localStorage.getItem('biz_db')) || { mobile: "000", profile: {userName: "ইউজার"}, stock: 0 };
+    let myID = dbData.mobile, activeChat = null;
+
+    window.onload = () => {
+        const cfg = { apiKey: "AIzaSyAc2_sT-1Gaf2pKAUghoNhrnb-Jr2uAQJc", databaseURL: "https://stock-a2z-default-rtdb.firebaseio.com", storageBucket: "stock-a2z-default-rtdb.appspot.com" };
+        if (!firebase.apps.length) firebase.initializeApp(cfg);
+        window.database = firebase.database(); window.storage = firebase.storage();
+        document.getElementById('app-loader').style.display = 'none';
+        loadPublicFeed(); loadMyProfileData();
+    };
+
+    function switchTab(t, btn) {
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active-tab'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        document.getElementById(t + '-tab').classList.add('active-tab');
+        btn.classList.add('active');
+        if(t==='messages') loadChatList(); if(t==='friends') loadFriends();
+    }
+
+    function renderPost(p, k) {
+        return `<div class="card"><b>${p.senderName}</b><br><small>${new Date(p.time).toLocaleString()}</small><p>${p.text}</p>
+        <button class="btn" onclick="likePost('${k}')">👍 ${p.likes || 0}</button></div>`;
+    }
+
+    function loadPublicFeed() {
+        database.ref('public_status').limitToLast(20).on('value', s => {
+            let h = ""; s.forEach(v => h = renderPost(v.val(), v.key) + h);
+            document.getElementById('public-feed').innerHTML = h;
+        });
+    }
+
+    function postStatus() {
+        let t = document.getElementById('status-input').value; if(!t) return;
+        database.ref('public_status').push({senderPhone: myID, senderName: dbData.profile.userName, text: t, time: Date.now(), likes: 0});
+        document.getElementById('status-input').value = "";
+    }
+
+    function loadChatList() {
+        database.ref('friends/'+myID).once('value', s => {
+            let h = ""; s.forEach(f => h += `<div class="card" onclick="openChat('${f.key}')">💬 ${f.key} <div id="dot-${f.key}" class="unread-dot-chat"></div></div>`);
+            document.getElementById('chat-user-list').innerHTML = h;
+        });
+    }
+
+    function openChat(p) {
+        activeChat = p; document.getElementById('chat-title').innerText = p;
+        document.getElementById('chat-window').style.display = 'flex';
+        let id = myID < p ? myID+"_"+p : p+"_"+myID;
+        database.ref('chats/'+id).limitToLast(30).on('value', s => {
+            let h = "", d = document.getElementById('chat-messages');
+            s.forEach(m => h += `<div class="msg-bubble ${m.val().sender===myID?'msg-sent':'msg-received'}">${m.val().text}</div>`);
+            d.innerHTML = h; d.scrollTop = d.scrollHeight;
+        });
+    }
+
+    function sendChatMessage() {
+        let t = document.getElementById('chat-input').value, id = myID < activeChat ? myID+"_"+activeChat : activeChat+"_"+myID;
+        if(!t.trim()) return;
+        database.ref('chats/'+id).push({sender: myID, text: t, time: Date.now()});
+        document.getElementById('chat-input').value = "";
+    }
+
+    function closeChat() { document.getElementById('chat-window').style.display='none'; activeChat=null; }
+    
+    function loadFriends() {
+        database.ref('friends/'+myID).on('value', s => {
+            let h = "<h4>বন্ধুরা</h4>"; s.forEach(f => h += `<div class="card">👤 ${f.key}</div>`);
+            document.getElementById('my-friends-list').innerHTML = h;
+        });
+    }
+
+    function loadMyProfileData() {
+        document.getElementById('my-name-display').innerText = dbData.profile.userName;
+        document.getElementById('my-img-display').src = dbData.profile.img || "https://cdn-icons-png.flaticon.com/512/149/149071.png";
+    }
+
+    function likePost(k) {
+        database.ref('public_status/'+k+'/likes').transaction(l => (l || 0) + 1);
+    }
+</script>
+</body>
+</html>
